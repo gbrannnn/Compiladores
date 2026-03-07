@@ -22,6 +22,7 @@ struct MEM {
 };
 
 int AC, PC;
+int ACCESS = 0;
 bool N, Z;
 struct MEM mem;
 
@@ -54,69 +55,85 @@ int interpreter(unsigned char byte, int current_index){
 		case STA:
 			index_value = mem.data[current_index + 2];
 			mem.data[index_value * 2] = AC;
+			ACCESS += 3;
 			return 0;
 		case LDA:	
 			index_value = mem.data[current_index + 2];
 			AC += AC + mem.data[index_value * 2];
+			ACCESS += 3;
 			return 0;
 		case ADD:
 			index_value = mem.data[current_index + 2];
 			AC += mem.data[index_value * 2];
+			ACCESS += 3;
 			return 0;
 		case OR:
 			index_value = mem.data[current_index + 2];
 			AC = AC | mem.data[index_value * 2];
+			ACCESS += 3;
 			return 0;
 		case AND:
 			index_value = mem.data[current_index + 2];
 			AC = AC & mem.data[index_value * 2];
+			ACCESS += 3;
 			return 0;
 		case NOT:
 			AC = ~AC;
+			ACCESS += 1;
 			return 0;
 		case JMP:
 			index_value = mem.data[current_index + 2];
-			PC = index_value - 1; 
+			PC = index_value - 1;
+		       	ACCESS += 2;	
 			return 0;
+		case JN:
+			index_value = mem.data[current_index + 2];
+			PC = index_value - 1;
+			ACCESS += 2;
+		case JZ:
+			index_value = mem.data[current_index + 2];
+			PC = index_value - 1;
+			ACCESS += 2;
 		case HLT:
+			ACCESS += 1;
 			return 1;
 		default:
 			return 0;
 	}
 }
 
-int main() {
+FILE *getFile(char *path){
 	FILE *file;
-	file = fopen("neader_code.mem", "rb");
+	
+	file = fopen(path, "rb");
 
+	return file;
+}
+
+
+int main(int argc, char *argv[]) {
+	FILE *file = getFile(argv[1]);
+	
 	if (file == NULL){
 		printf("Erro ao abrir o arquivo.\n");
 		return 1;
 	}
-	
-	fseek(file, 0L, SEEK_END);
-	
-	long file_size = ftell(file);
 
-	rewind(file);
-
-	printf("file size: %d\n", file_size);
-	
 
 	fread(&mem, sizeof(mem), 1, file);
 	
+	/*
 	for(int i=0; i < sizeof(mem.header); i++){
 		printf("%u ", mem.header[i]);
 	}
-	
+	*/
 	printf("\n");	
 	
-
 	int interpreter_return;
 	for(PC=0; PC < sizeof(mem.data); PC++){
 		interpreter_return = interpreter(mem.data[PC], PC);
 		if(interpreter_return == 1){
-			printf("HLT\n");
+			printf("END: HLT\n");
 			break;
 		}
 		validateResult(AC);
@@ -126,6 +143,7 @@ int main() {
 	fclose(file);
 	
 	printf("AC: %d | PC: %d\n", AC, PC);
-	printf("N: %b | Z: %b", N, Z);
+	printf("N: %b | Z: %b\n", N, Z);
+	printf("ACCESS: %d", ACCESS);
 	return 0;
 }
