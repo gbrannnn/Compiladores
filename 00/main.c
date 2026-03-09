@@ -1,8 +1,10 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <stdbool.h>
+#include <string.h>
+#include <unistd.h>
 
-enum MNEMO {
+typedef enum {
 	NOP = 0,
 	STA = 16,
 	LDA = 32,	
@@ -14,95 +16,128 @@ enum MNEMO {
 	JN = 144,
 	JZ = 160,
 	HLT = 240
-};
+} MNEMO;
+
+const char *get_key_mnemo(MNEMO mnemo) {
+    switch (mnemo) {
+        case NOP: return "NOP";
+        case STA: return "STA";
+        case LDA: return "LDA";
+		case ADD: return "ADD";
+		case OR: return "OR";
+		case AND: return "AND";
+		case NOT: return "NOT";
+		case JMP: return "JMP";
+		case JN: return "JN";
+		case JZ: return "JZ";
+		case HLT: return "HLT";
+        default:  return "-";
+    }
+}
 
 struct MEM {
 	unsigned char header[4];
-	unsigned char data[516];
+	unsigned char data[512];
 };
 
-int AC, PC;
-int ACCESS = 0;
+int PC, AC, ACCESS = 0, INSTRUCTIONS = 0;
 bool N, Z;
 struct MEM mem;
 
-bool isNegative(int value){
-	if(value < 0){
-		return true;
-	}
-	return false;
+bool is_negative(int value){
+	return ((signed char)value) < 0;
 }
 
-bool isZero(int value){
-	if(value == 0){
-		return true;
-	}
-	return false;
+bool is_zero(int value){
+	return ((unsigned char)value) == 0;
 }
 
-void validateResult(int result){
-	N = isNegative(result);
-	Z = isZero(result);
+void validate_result(int result){
+	N = is_negative(result);
+	Z = is_zero(result);
+}
+
+void new_PC(int index_end){
+	if(index_end <= 1){
+		PC = index_end;
+		return;
+	}
+	
+	if(index_end > PC / 2){
+		PC = index_end * 2 - 1;
+	}else if(index_end < PC / 2){
+		PC = index_end / 2 - 1;
+	}
 }
 
 int interpreter(unsigned char byte, int current_index){
-	enum MNEMO mnemo;
+	MNEMO mnemo;
 	int index_value;
-	int result;
 	switch(byte){
 		case NOP:
 			return 0;
 		case STA:
-			index_value = mem.data[current_index + 2];
-			mem.data[index_value * 2] = AC;
+			mem.data[mem.data[current_index + 2] * 2] = AC;
 			ACCESS += 3;
+			INSTRUCTIONS ++;
 			return 0;
-		case LDA:	
-			index_value = mem.data[current_index + 2];
-			AC += AC + mem.data[index_value * 2];
+		case LDA:
+			AC = mem.data[mem.data[current_index + 2] * 2];
 			ACCESS += 3;
+			INSTRUCTIONS ++;
 			return 0;
 		case ADD:
-			index_value = mem.data[current_index + 2];
-			AC += mem.data[index_value * 2];
+			AC = (unsigned char)(AC + mem.data[mem.data[current_index + 2] * 2]);
 			ACCESS += 3;
+			INSTRUCTIONS ++;
 			return 0;
 		case OR:
-			index_value = mem.data[current_index + 2];
-			AC = AC | mem.data[index_value * 2];
+			AC = (unsigned char)(AC | mem.data[mem.data[current_index + 2] * 2]);
 			ACCESS += 3;
+			INSTRUCTIONS ++;
 			return 0;
 		case AND:
-			index_value = mem.data[current_index + 2];
-			AC = AC & mem.data[index_value * 2];
+			AC = (unsigned char)(AC & mem.data[mem.data[current_index + 2] * 2]);
 			ACCESS += 3;
+			INSTRUCTIONS ++;
 			return 0;
 		case NOT:
-			AC = ~AC;
+			AC = (unsigned char)~(AC);
 			ACCESS += 1;
+			INSTRUCTIONS ++;
 			return 0;
 		case JMP:
 			index_value = mem.data[current_index + 2];
-			PC = index_value - 1;
-		       	ACCESS += 2;	
+			new_PC(index_value);
+		       	ACCESS += 2;
+			INSTRUCTIONS ++;
 			return 0;
 		case JN:
 			index_value = mem.data[current_index + 2];
-			PC = index_value - 1;
+			if(N == 1){
+				new_PC(index_value);		
+			}	
 			ACCESS += 2;
+			INSTRUCTIONS ++;
+			return 0;
 		case JZ:
 			index_value = mem.data[current_index + 2];
-			PC = index_value - 1;
+			if(Z == 1){
+				new_PC(index_value);		
+			}
 			ACCESS += 2;
+			INSTRUCTIONS ++;
+			return 0;
 		case HLT:
 			ACCESS += 1;
+			INSTRUCTIONS ++;
 			return 1;
 		default:
 			return 0;
 	}
 }
 
-FILE *getFile(char *path){
+FILE *get_file(char *path){
 	FILE *file;
 	
 	file = fopen(path, "rb");
@@ -110,23 +145,71 @@ FILE *getFile(char *path){
 	return file;
 }
 
+char *define_format(char *command){
+	char *format;
+	if (strcmp(command, "-hex") == 0 || strcmp(command, "--h") == 0) {
+		format = "%#x";
+	} else if (strcmp(command, "-dec") == 0 || strcmp(command, "--d") == 0) {
+		format = "%d";
+	}
+
+	return format;
+}
+
+void print_state(const char *spec) {
+    char str[64];
+
+    snprintf(str, sizeof(str), "AC: %s | PC: %s\n", spec, spec);
+    printf(str, AC, PC);
+
+    snprintf(str, sizeof(str), "N: %s | Z: %s\n", spec, spec);
+    printf(str, N, Z);
+
+    snprintf(str, sizeof(str), "ACCESS: %s | INSTRUCTIONS: %s\n", spec, spec);
+    printf(str, ACCESS, INSTRUCTIONS);
+}
+
+void print_memorymap(const char *spec){
+	char str[16];
+	printf("END | DATA | MNEMO\n");
+	int end = 0;
+	for(int i=0; i < sizeof(mem.data); i++){
+		if(mem.data[i] == 0){
+			continue;
+		}
+		
+		snprintf(str, sizeof(str), "%s | %s | %s\n", spec, spec, "%s");
+		printf(str, i/2, mem.data[i], get_key_mnemo(mem.data[i]));
+	}
+}
 
 int main(int argc, char *argv[]) {
-	FILE *file = getFile(argv[1]);
+	if(argc < 2){
+		printf("Needs file path!!");
+		return  1;
+	}
 	
+	char *format = "%d";
+	if(argc > 2){
+		format = define_format(argv[2]);
+	}
+
+	FILE *file = get_file(argv[1]);
+
 	if (file == NULL){
-		printf("Erro ao abrir o arquivo.\n");
+		printf("Error to open file.\n");
 		return 1;
 	}
 
-
 	fread(&mem, sizeof(mem), 1, file);
 	
-	/*
-	for(int i=0; i < sizeof(mem.header); i++){
-		printf("%u ", mem.header[i]);
+	if(ferror(file)){
+		printf("Error to read file");
+		return 1;
 	}
-	*/
+	
+	printf("\n");
+	print_memorymap(format);
 	printf("\n");	
 	
 	int interpreter_return;
@@ -136,14 +219,17 @@ int main(int argc, char *argv[]) {
 			printf("END: HLT\n");
 			break;
 		}
-		validateResult(AC);
+		validate_result(AC);
 	}
 	PC = PC/2 + 1;
 
 	fclose(file);
 	
-	printf("AC: %d | PC: %d\n", AC, PC);
-	printf("N: %b | Z: %b\n", N, Z);
-	printf("ACCESS: %d", ACCESS);
+	print_state(format);	
+
+	printf("\n");
+	print_memorymap(format);
+	printf("\n");	
+
 	return 0;
 }
