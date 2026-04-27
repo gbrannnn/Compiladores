@@ -27,6 +27,11 @@ typedef struct tokenizer {
   token_t    *(*get_next_token) (struct tokenizer*); 
 }tokenizer_t;
 
+typedef struct symbol {
+  char *name;
+  __uint8_t address;
+} symbol_t;
+
 void init_tokenizer(tokenizer_t *tokenizer);
 
 #endif

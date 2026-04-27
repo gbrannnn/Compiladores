@@ -15,11 +15,19 @@ static node_t *multiplicative_expression(parser_t *parser,
 static node_t *additive_expression(parser_t *parser, tokenizer_t *tokenizer);
 static node_t *expression(parser_t *parser, tokenizer_t *tokenizer);
 static node_t *program(parser_t *parser, tokenizer_t *tokenizer);
+static void define_data_symbols(node_t *root, int *count, symbols_list_t **data_symbols_list);
+static void data_symbols(tree_t *tree, parser_t *parser);
+
+
+static void data_symbols(tree_t *tree, parser_t *parser) { int count = 1; 
+                          define_data_symbols(tree->root, &count, &parser->data_symbols_list); }
 
 void init_parser(parser_t *parser) {
   parser->parse = parse;
   parser->validate = validate;
   parser->valid = 1;
+  parser->data_symbols = data_symbols;
+  parser->data_symbols_list = NULL;
 }
 
 static node_t *parse(parser_t *parser, tokenizer_t *tokenizer, char *str) {
@@ -162,4 +170,40 @@ static node_t *expression(parser_t *parser, tokenizer_t *tokenizer) {
 
 static node_t *program(parser_t *parser, tokenizer_t *tokenizer) {
   return expression(parser, tokenizer);
+}
+
+static void define_data_symbols(node_t *root, int *count, symbols_list_t **data_symbols_list) {
+  if (root == NULL)
+    return;
+
+  if (root->type == NUMBER) {
+    symbol_t *symbol = malloc(sizeof(symbol_t));
+    int str_l = strlen("@DB");
+    symbol->name = malloc((str_l + 1) * sizeof(char));
+    strcpy(symbol->name, "@DB");
+    symbol->address = 256 - *count;
+
+    printf("%s %d %ld\n", symbol->name, symbol->address, root->value);
+    (*count)++;
+
+    symbols_list_t *new_node = malloc(sizeof(symbols_list_t));
+    new_node->symbol = symbol;
+    new_node->next = *data_symbols_list;
+    *data_symbols_list = new_node;
+  }
+
+  define_data_symbols(root->left, count, data_symbols_list);
+  define_data_symbols(root->right, count, data_symbols_list);
+}
+
+void print_data_symbols(symbols_list_t *data_symbols_list) {
+  symbols_list_t *current = data_symbols_list;
+  if (current == NULL) {
+    printf("No data symbols found.\n");
+    return;
+  }
+  while (current != NULL) {
+    printf("Symbol: %s, Address: %d\n", current->symbol->name, current->symbol->address);
+    current = current->next;
+  }
 }
