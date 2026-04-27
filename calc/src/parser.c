@@ -22,12 +22,37 @@ static void data_symbols(tree_t *tree, parser_t *parser);
 static void data_symbols(tree_t *tree, parser_t *parser) { int count = 1; 
                           define_data_symbols(tree->root, &count, &parser->data_symbols_list); }
 
+
+void add_data_symbol(symbols_list_t **data_symbols_list, char *name, long int value , int address) {
+  // Cria e preenche o novo nó
+  symbols_list_t *new_node = malloc(sizeof(symbols_list_t));
+  new_node->symbol = malloc(sizeof(symbol_t));
+  new_node->symbol->value = value;
+  int str_l = strlen(name);
+  new_node->symbol->name = malloc((str_l + 1) * sizeof(char));
+  strcpy(new_node->symbol->name, name);
+  new_node->symbol->address = address;
+  new_node->next = NULL;
+
+  // Encadeia no fim da lista
+  if (*data_symbols_list == NULL) {
+    *data_symbols_list = new_node;
+  } else {
+    symbols_list_t *current = *data_symbols_list;
+    while (current->next != NULL)
+      current = current->next;
+    current->next = new_node;
+  }
+}
+
 void init_parser(parser_t *parser) {
   parser->parse = parse;
   parser->validate = validate;
   parser->valid = 1;
   parser->data_symbols = data_symbols;
-  parser->data_symbols_list = NULL;
+  symbols_list_t *data_symbols_list = NULL;
+  add_data_symbol(&data_symbols_list, "@DBRESULT", 0, 255);
+  parser->data_symbols_list = data_symbols_list;
 }
 
 static node_t *parse(parser_t *parser, tokenizer_t *tokenizer, char *str) {
@@ -175,21 +200,10 @@ static node_t *program(parser_t *parser, tokenizer_t *tokenizer) {
 static void define_data_symbols(node_t *root, int *count, symbols_list_t **data_symbols_list) {
   if (root == NULL)
     return;
-
+  
   if (root->type == NUMBER) {
-    symbol_t *symbol = malloc(sizeof(symbol_t));
-    int str_l = strlen("@DB");
-    symbol->name = malloc((str_l + 1) * sizeof(char));
-    strcpy(symbol->name, "@DB");
-    symbol->address = 256 - *count;
-
-    printf("%s %d %ld\n", symbol->name, symbol->address, root->value);
+    add_data_symbol(data_symbols_list, "@DB", root->value, 255 - *count);
     (*count)++;
-
-    symbols_list_t *new_node = malloc(sizeof(symbols_list_t));
-    new_node->symbol = symbol;
-    new_node->next = *data_symbols_list;
-    *data_symbols_list = new_node;
   }
 
   define_data_symbols(root->left, count, data_symbols_list);
@@ -203,7 +217,7 @@ void print_data_symbols(symbols_list_t *data_symbols_list) {
     return;
   }
   while (current != NULL) {
-    printf("Symbol: %s, Address: %d\n", current->symbol->name, current->symbol->address);
+    printf("%s %d %ld\n", current->symbol->name, current->symbol->address, current->symbol->value);
     current = current->next;
   }
 }

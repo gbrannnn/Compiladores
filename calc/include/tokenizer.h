@@ -29,6 +29,7 @@ typedef struct tokenizer {
 
 typedef struct symbol {
   char *name;
+  long int value;
   __uint8_t address;
 } symbol_t;
 
