@@ -33,7 +33,9 @@ typedef struct parser{
   node_t    *(*parse) (struct parser*, tokenizer_t*, char*);
   void      (*validate) (struct parser*);
   void      (*data_symbols) (struct tree*, struct parser*);
+  void      (*body_symbols) (struct tree*, struct parser*);
   symbols_list_t *data_symbols_list;
+  void      (*free_data_symbols) (symbols_list_t*);
 }parser_t;
 
 

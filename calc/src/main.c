@@ -23,9 +23,11 @@ int main(int argc, char *argv[]) {
 
   // ast.print(&ast);
   parser.data_symbols(&ast, &parser);
+  parser.body_symbols(&ast, &parser);
 
   print_data_symbols(parser.data_symbols_list);
 
+  parser.free_data_symbols(parser.data_symbols_list);
   ast.free_all(&ast);
   tokenizer.free_str(&tokenizer);
 

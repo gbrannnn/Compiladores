@@ -17,11 +17,15 @@ static node_t *expression(parser_t *parser, tokenizer_t *tokenizer);
 static node_t *program(parser_t *parser, tokenizer_t *tokenizer);
 static void define_data_symbols(node_t *root, int *count, symbols_list_t **data_symbols_list);
 static void data_symbols(tree_t *tree, parser_t *parser);
+static void define_body_symbols(node_t *root, int *count, symbols_list_t **data_symbols_list);
+static void body_symbols(tree_t *tree, parser_t *parser);
+static void free_data_symbols(symbols_list_t *data_symbols_list);
 
+int count = 1; // Contador para endereços de símbolos, começa em 1 porque @DBRESULT já ocupa o endereço 255
 
-static void data_symbols(tree_t *tree, parser_t *parser) { int count = 1; 
-                          define_data_symbols(tree->root, &count, &parser->data_symbols_list); }
+static void data_symbols(tree_t *tree, parser_t *parser) { define_data_symbols(tree->root, &count, &parser->data_symbols_list); }
 
+static void body_symbols(tree_t *tree, parser_t *parser) { count = 1; define_body_symbols(tree->root, &count, &parser->data_symbols_list); }
 
 void add_data_symbol(symbols_list_t **data_symbols_list, char *name, long int value , int address) {
   // Cria e preenche o novo nó
@@ -31,7 +35,9 @@ void add_data_symbol(symbols_list_t **data_symbols_list, char *name, long int va
   int str_l = strlen(name);
   new_node->symbol->name = malloc((str_l + 1) * sizeof(char));
   strcpy(new_node->symbol->name, name);
+
   new_node->symbol->address = address;
+  
   new_node->next = NULL;
 
   // Encadeia no fim da lista
@@ -50,6 +56,8 @@ void init_parser(parser_t *parser) {
   parser->validate = validate;
   parser->valid = 1;
   parser->data_symbols = data_symbols;
+  parser->body_symbols = body_symbols;
+  parser->free_data_symbols = free_data_symbols;
   symbols_list_t *data_symbols_list = NULL;
   add_data_symbol(&data_symbols_list, "@DBRESULT", 0, 255);
   parser->data_symbols_list = data_symbols_list;
@@ -206,6 +214,13 @@ static void define_data_symbols(node_t *root, int *count, symbols_list_t **data_
     (*count)++;
   }
 
+    // Se há multiplicação, reserva os símbolos auxiliares uma única vez
+  if (root->type == MULTIPLICATION_OPERATOR) {
+    add_data_symbol(data_symbols_list, "@MUL_RESULT", 0, 255 - *count); (*count)++;
+    add_data_symbol(data_symbols_list, "@MUL_COUNTER", 0, 255 - *count); (*count)++;
+    add_data_symbol(data_symbols_list, "@NEG1", 255, 255 - *count); (*count)++; // 255 = -1 em complemento de 2
+  }
+
   define_data_symbols(root->left, count, data_symbols_list);
   define_data_symbols(root->right, count, data_symbols_list);
 }
@@ -217,7 +232,102 @@ void print_data_symbols(symbols_list_t *data_symbols_list) {
     return;
   }
   while (current != NULL) {
-    printf("%s %d %ld\n", current->symbol->name, current->symbol->address, current->symbol->value);
+    if(strcmp(current->symbol->name, "@DBRESULT") == 0 || strcmp(current->symbol->name, "@DB") == 0){
+      printf("%s %d %ld\n", current->symbol->name, current->symbol->address, current->symbol->value);
+    } else {
+      printf("%s %d\n", current->symbol->name, current->symbol->address);
+    }
     current = current->next;
+  }
+}
+
+// static void define_body_symbols(node_t *root, int *count, symbols_list_t **data_symbols_list) {
+//   if (root == NULL)
+//     return;
+  
+//   if(root->type == NUMBER && *count == 1) {
+//     add_data_symbol(data_symbols_list, "LDA", root->value, -1);
+//     (*count)++;
+//   }
+
+//   char *symbol_name = malloc(5 * sizeof(char));
+//   if (root->type != NUMBER) {
+//     switch (root->type)
+//     {
+//     case ADDITIVE_OPERATOR:
+//       strcpy(symbol_name, "ADD");
+//       break;
+//     default:
+//       break;
+//     }
+     
+//     add_data_symbol(data_symbols_list, symbol_name, root->value, -1);
+//     (*count)++;
+//   }
+
+//   define_body_symbols(root->left, count, data_symbols_list);
+//   define_body_symbols(root->right, count, data_symbols_list);
+// }
+
+int find_symbol_address(symbols_list_t *list, long int value) {
+  symbols_list_t *current = list;
+  while (current != NULL) {
+    if (current->symbol->value == value && strncmp(current->symbol->name, "@DB", 3) == 0)
+      return current->symbol->address;
+    current = current->next;
+  }
+  return -1;
+}
+
+static void define_body_symbols(node_t *root, int *count, symbols_list_t **data_symbols_list) {
+  if (root == NULL)
+    return;
+
+  if (root->type == NUMBER) {
+    if (*count == 1) {
+      int addr = find_symbol_address(*data_symbols_list, root->value);
+      add_data_symbol(data_symbols_list, "LDA", root->value, addr);
+      (*count)++;
+    }
+    return;
+  }
+
+  define_body_symbols(root->left, count, data_symbols_list);
+
+  if (root->right != NULL) {
+    char *op_name = NULL;
+
+    switch (root->type) {
+      case ADDITIVE_OPERATOR:
+        op_name = "ADD";
+        break;
+      case MULTIPLICATION_OPERATOR:
+        op_name = "MUL";
+        break;
+      default:
+        break;
+    }
+
+    if (op_name != NULL) {
+      node_t *right_leaf = root->right;
+      while (right_leaf->left != NULL) right_leaf = right_leaf->left;
+
+      int addr = find_symbol_address(*data_symbols_list, right_leaf->value);
+      add_data_symbol(data_symbols_list, op_name, right_leaf->value, addr);
+      (*count)++;
+    }
+  }
+
+  if (root->right != NULL && root->right->type != NUMBER)
+    define_body_symbols(root->right, count, data_symbols_list);
+}
+
+static void free_data_symbols(symbols_list_t *data_symbols_list) {
+  symbols_list_t *current = data_symbols_list;
+  while (current != NULL) {
+    symbols_list_t *next = current->next;
+    free(current->symbol);
+    free(current);
+    current = next;
   }
 }
