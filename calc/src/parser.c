@@ -241,42 +241,40 @@ void print_data_symbols(symbols_list_t *data_symbols_list) {
   }
 }
 
-// static void define_body_symbols(node_t *root, int *count, symbols_list_t **data_symbols_list) {
-//   if (root == NULL)
-//     return;
-  
-//   if(root->type == NUMBER && *count == 1) {
-//     add_data_symbol(data_symbols_list, "LDA", root->value, -1);
-//     (*count)++;
-//   }
-
-//   char *symbol_name = malloc(5 * sizeof(char));
-//   if (root->type != NUMBER) {
-//     switch (root->type)
-//     {
-//     case ADDITIVE_OPERATOR:
-//       strcpy(symbol_name, "ADD");
-//       break;
-//     default:
-//       break;
-//     }
-     
-//     add_data_symbol(data_symbols_list, symbol_name, root->value, -1);
-//     (*count)++;
-//   }
-
-//   define_body_symbols(root->left, count, data_symbols_list);
-//   define_body_symbols(root->right, count, data_symbols_list);
-// }
-
-int find_symbol_address(symbols_list_t *list, long int value) {
+int find_symbol_address(symbols_list_t *list, long int value, char *name) {
   symbols_list_t *current = list;
   while (current != NULL) {
-    if (current->symbol->value == value && strncmp(current->symbol->name, "@DB", 3) == 0)
+    if (current->symbol->value == value && strncmp(current->symbol->name, name, strlen(name)) == 0)
       return current->symbol->address;
     current = current->next;
   }
   return -1;
+}
+
+void generate_code_multiplication(int left_addr, int right_addr, symbols_list_t **data_symbols_list) {
+  int result_addr = find_symbol_address(*data_symbols_list, 0, "@MUL_RESULT");
+  int counter_addr = find_symbol_address(*data_symbols_list, 0, "@MUL_COUNTER");
+  int neg1_addr = find_symbol_address(*data_symbols_list, 255, "@NEG1");
+
+  // Zera @MUL_RESULT e inicializa @MUL_COUNTER com o operando direito
+  // (assume que right_addr é o contador, left_addr é o que se soma)
+  add_data_symbol(data_symbols_list, "LDA",  0,            0);            // LDA #0 — depende se seu neander tem imediato
+  add_data_symbol(data_symbols_list, "STA",  result_addr,  result_addr);  // STA @MUL_RESULT
+
+  add_data_symbol(data_symbols_list, "LDA",  right_addr,   right_addr);   // LDA B
+  add_data_symbol(data_symbols_list, "STA",  counter_addr, counter_addr); // STA @MUL_COUNTER
+
+  // LOOP:
+  add_data_symbol(data_symbols_list, "LDA",  result_addr,  result_addr);  // LDA @MUL_RESULT
+  add_data_symbol(data_symbols_list, "ADD",  left_addr,    left_addr);    // ADD A
+  add_data_symbol(data_symbols_list, "STA",  result_addr,  result_addr);  // STA @MUL_RESULT
+
+  add_data_symbol(data_symbols_list, "LDA",  counter_addr, counter_addr); // LDA @MUL_COUNTER
+  add_data_symbol(data_symbols_list, "ADD",  neg1_addr,    neg1_addr);    // ADD @NEG1 (decrementa)
+  add_data_symbol(data_symbols_list, "STA",  counter_addr, counter_addr); // STA @MUL_COUNTER
+
+  add_data_symbol(data_symbols_list, "JZ",   -1, -1);   // JZ FIM — endereço resolvido depois
+  add_data_symbol(data_symbols_list, "JMP",  -1, -1);   // JMP LOOP — endereço resolvido depois
 }
 
 static void define_body_symbols(node_t *root, int *count, symbols_list_t **data_symbols_list) {
@@ -285,7 +283,7 @@ static void define_body_symbols(node_t *root, int *count, symbols_list_t **data_
 
   if (root->type == NUMBER) {
     if (*count == 1) {
-      int addr = find_symbol_address(*data_symbols_list, root->value);
+      int addr = find_symbol_address(*data_symbols_list, root->value, "@DB");
       add_data_symbol(data_symbols_list, "LDA", root->value, addr);
       (*count)++;
     }
@@ -302,7 +300,9 @@ static void define_body_symbols(node_t *root, int *count, symbols_list_t **data_
         op_name = "ADD";
         break;
       case MULTIPLICATION_OPERATOR:
-        op_name = "MUL";
+        generate_code_multiplication(find_symbol_address(*data_symbols_list, root->left->value, "@DB"), 
+                                    find_symbol_address(*data_symbols_list, root->right->value, "@DB"), 
+                                    data_symbols_list);
         break;
       default:
         break;
@@ -312,7 +312,7 @@ static void define_body_symbols(node_t *root, int *count, symbols_list_t **data_
       node_t *right_leaf = root->right;
       while (right_leaf->left != NULL) right_leaf = right_leaf->left;
 
-      int addr = find_symbol_address(*data_symbols_list, right_leaf->value);
+      int addr = find_symbol_address(*data_symbols_list, right_leaf->value, "@DB");
       add_data_symbol(data_symbols_list, op_name, right_leaf->value, addr);
       (*count)++;
     }

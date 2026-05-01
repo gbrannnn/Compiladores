@@ -31,6 +31,7 @@ typedef struct symbol {
   char *name;
   long int value;
   __uint8_t address;
+  int line_count;
 } symbol_t;
 
 void init_tokenizer(tokenizer_t *tokenizer);
