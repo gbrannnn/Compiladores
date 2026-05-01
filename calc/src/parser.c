@@ -15,23 +15,24 @@ static node_t *multiplicative_expression(parser_t *parser,
 static node_t *additive_expression(parser_t *parser, tokenizer_t *tokenizer);
 static node_t *expression(parser_t *parser, tokenizer_t *tokenizer);
 static node_t *program(parser_t *parser, tokenizer_t *tokenizer);
-static void define_data_symbols(node_t *root, int *count, symbols_list_t **data_symbols_list);
+static void define_data_symbols(node_t *root, symbols_list_t **data_symbols_list);
 static void data_symbols(tree_t *tree, parser_t *parser);
-static void define_body_symbols(node_t *root, int *count, symbols_list_t **data_symbols_list);
+static void define_body_symbols(node_t *root, symbols_list_t **data_symbols_list);
 static void body_symbols(tree_t *tree, parser_t *parser);
 static void free_data_symbols(symbols_list_t *data_symbols_list);
 
 int count = 1; // Contador para endereços de símbolos, começa em 1 porque @DBRESULT já ocupa o endereço 255
+symbol_t last_symbol; // Variável global para armazenar o último símbolo adicionado, usada para resolver endereços de JMP e JZ
 
-static void data_symbols(tree_t *tree, parser_t *parser) { define_data_symbols(tree->root, &count, &parser->data_symbols_list); }
+static void data_symbols(tree_t *tree, parser_t *parser) { define_data_symbols(tree->root, &parser->data_symbols_list); }
 
-static void body_symbols(tree_t *tree, parser_t *parser) { count = 1; define_body_symbols(tree->root, &count, &parser->data_symbols_list); }
-
-void add_data_symbol(symbols_list_t **data_symbols_list, char *name, long int value , int address) {
+void add_data_symbol(symbols_list_t **data_symbols_list, char *name, long int value , int address, int line_count) {
   // Cria e preenche o novo nó
   symbols_list_t *new_node = malloc(sizeof(symbols_list_t));
   new_node->symbol = malloc(sizeof(symbol_t));
   new_node->symbol->value = value;
+  new_node->symbol->line_count = line_count;
+  new_node->symbol->used = 0;
   int str_l = strlen(name);
   new_node->symbol->name = malloc((str_l + 1) * sizeof(char));
   strcpy(new_node->symbol->name, name);
@@ -49,7 +50,28 @@ void add_data_symbol(symbols_list_t **data_symbols_list, char *name, long int va
       current = current->next;
     current->next = new_node;
   }
+  count++;
 }
+
+static void body_symbols(tree_t *tree, parser_t *parser) {
+  count = 0;
+  define_body_symbols(tree->root, &parser->data_symbols_list);
+
+  // Linha do HLT = count atual * 2 (cada instrução ocupa 2 bytes)
+  int hlt_line = count * 2;
+
+  add_data_symbol(&parser->data_symbols_list, "HLT", 0, 0, hlt_line);
+
+  // Resolve todos os JZ pendentes (address == -1) para apontar para o HLT
+  symbols_list_t *current = parser->data_symbols_list;
+  while (current != NULL) {
+    if (strcmp(current->symbol->name, "JZ") == 0 && current->symbol->line_count == -1) {
+      current->symbol->address  = hlt_line;
+      current->symbol->line_count = hlt_line;
+    }
+    current = current->next;
+  }
+}                                     
 
 void init_parser(parser_t *parser) {
   parser->parse = parse;
@@ -59,7 +81,7 @@ void init_parser(parser_t *parser) {
   parser->body_symbols = body_symbols;
   parser->free_data_symbols = free_data_symbols;
   symbols_list_t *data_symbols_list = NULL;
-  add_data_symbol(&data_symbols_list, "@DBRESULT", 0, 255);
+  add_data_symbol(&data_symbols_list, "@DBRESULT", 0, 255, -1);
   parser->data_symbols_list = data_symbols_list;
 }
 
@@ -205,28 +227,28 @@ static node_t *program(parser_t *parser, tokenizer_t *tokenizer) {
   return expression(parser, tokenizer);
 }
 
-static void define_data_symbols(node_t *root, int *count, symbols_list_t **data_symbols_list) {
+static void define_data_symbols(node_t *root, symbols_list_t **data_symbols_list) {
   if (root == NULL)
     return;
   
   if (root->type == NUMBER) {
-    add_data_symbol(data_symbols_list, "@DB", root->value, 255 - *count);
-    (*count)++;
+    add_data_symbol(data_symbols_list, "@DB", root->value, 255 - count, -1);
   }
 
     // Se há multiplicação, reserva os símbolos auxiliares uma única vez
   if (root->type == MULTIPLICATION_OPERATOR) {
-    add_data_symbol(data_symbols_list, "@MUL_RESULT", 0, 255 - *count); (*count)++;
-    add_data_symbol(data_symbols_list, "@MUL_COUNTER", 0, 255 - *count); (*count)++;
-    add_data_symbol(data_symbols_list, "@NEG1", 255, 255 - *count); (*count)++; // 255 = -1 em complemento de 2
+    add_data_symbol(data_symbols_list, "@MUL_RESULT", 0, 255 - count, -1);
+    add_data_symbol(data_symbols_list, "@MUL_COUNTER", 0, 255 - count, -1);
+    add_data_symbol(data_symbols_list, "@NEG1", 255, 255 - count, -1); // 255 = -1 em complemento de 2
   }
 
-  define_data_symbols(root->left, count, data_symbols_list);
-  define_data_symbols(root->right, count, data_symbols_list);
+  define_data_symbols(root->left, data_symbols_list);
+  define_data_symbols(root->right, data_symbols_list);
 }
 
 void print_data_symbols(symbols_list_t *data_symbols_list) {
   symbols_list_t *current = data_symbols_list;
+  
   if (current == NULL) {
     printf("No data symbols found.\n");
     return;
@@ -234,6 +256,8 @@ void print_data_symbols(symbols_list_t *data_symbols_list) {
   while (current != NULL) {
     if(strcmp(current->symbol->name, "@DBRESULT") == 0 || strcmp(current->symbol->name, "@DB") == 0){
       printf("%s %d %ld\n", current->symbol->name, current->symbol->address, current->symbol->value);
+    } else if (strcmp(current->symbol->name, "JMP") == 0 || strcmp(current->symbol->name, "JZ") == 0) {
+      printf("%s %d\n", current->symbol->name, current->symbol->line_count);
     } else {
       printf("%s %d\n", current->symbol->name, current->symbol->address);
     }
@@ -244,53 +268,77 @@ void print_data_symbols(symbols_list_t *data_symbols_list) {
 int find_symbol_address(symbols_list_t *list, long int value, char *name) {
   symbols_list_t *current = list;
   while (current != NULL) {
-    if (current->symbol->value == value && strncmp(current->symbol->name, name, strlen(name)) == 0)
+    if (current->symbol->value == value && 
+        strncmp(current->symbol->name, name, strlen(name)) == 0 &&
+        current->symbol->used == 0) {
+      current->symbol->used = 1;  // marca como consumido
+      return current->symbol->address;
+    }
+    current = current->next;
+  }
+  return -1;
+}
+
+int find_symbol_address_peek(symbols_list_t *list, long int value, char *name) {
+  symbols_list_t *current = list;
+  while (current != NULL) {
+    if (current->symbol->value == value && 
+        strncmp(current->symbol->name, name, strlen(name)) == 0)
       return current->symbol->address;
     current = current->next;
   }
   return -1;
 }
 
-void generate_code_multiplication(int left_addr, int right_addr, symbols_list_t **data_symbols_list) {
-  int result_addr = find_symbol_address(*data_symbols_list, 0, "@MUL_RESULT");
-  int counter_addr = find_symbol_address(*data_symbols_list, 0, "@MUL_COUNTER");
-  int neg1_addr = find_symbol_address(*data_symbols_list, 255, "@NEG1");
+void generate_code_multiplication(node_t *left, node_t *right, symbols_list_t **data_symbols_list) {
+  int left_addr     = find_symbol_address(*data_symbols_list, left->value, "@DB");
+  int right_addr    = find_symbol_address(*data_symbols_list, right->value, "@DB");
+  int dbresult_addr = find_symbol_address_peek(*data_symbols_list, 0,   "@DBRESULT");
+  int result_addr   = find_symbol_address_peek(*data_symbols_list, 0,   "@MUL_RESULT");
+  int counter_addr  = find_symbol_address_peek(*data_symbols_list, 0,   "@MUL_COUNTER");
+  int neg1_addr     = find_symbol_address_peek(*data_symbols_list, 255, "@NEG1");
 
-  // Zera @MUL_RESULT e inicializa @MUL_COUNTER com o operando direito
-  // (assume que right_addr é o contador, left_addr é o que se soma)
-  add_data_symbol(data_symbols_list, "LDA",  0,            0);            // LDA #0 — depende se seu neander tem imediato
-  add_data_symbol(data_symbols_list, "STA",  result_addr,  result_addr);  // STA @MUL_RESULT
+  // Zera @MUL_RESULT: LDA @DBRESULT (vale 0) → STA @MUL_RESULT
+  add_data_symbol(data_symbols_list, "LDA", 0,            dbresult_addr, count * 2);
+  add_data_symbol(data_symbols_list, "STA", result_addr,  result_addr,   count * 2);
 
-  add_data_symbol(data_symbols_list, "LDA",  right_addr,   right_addr);   // LDA B
-  add_data_symbol(data_symbols_list, "STA",  counter_addr, counter_addr); // STA @MUL_COUNTER
+  // Inicializa @MUL_COUNTER com B
+  add_data_symbol(data_symbols_list, "LDA", right_addr,   right_addr,    count * 2);
+  add_data_symbol(data_symbols_list, "STA", counter_addr, counter_addr,  count * 2);
 
-  // LOOP:
-  add_data_symbol(data_symbols_list, "LDA",  result_addr,  result_addr);  // LDA @MUL_RESULT
-  add_data_symbol(data_symbols_list, "ADD",  left_addr,    left_addr);    // ADD A
-  add_data_symbol(data_symbols_list, "STA",  result_addr,  result_addr);  // STA @MUL_RESULT
+  // Captura a linha do LOOP antes de emitir as instruções dele
+  int loop_line = count * 2;
 
-  add_data_symbol(data_symbols_list, "LDA",  counter_addr, counter_addr); // LDA @MUL_COUNTER
-  add_data_symbol(data_symbols_list, "ADD",  neg1_addr,    neg1_addr);    // ADD @NEG1 (decrementa)
-  add_data_symbol(data_symbols_list, "STA",  counter_addr, counter_addr); // STA @MUL_COUNTER
+  // LOOP: @MUL_RESULT += A
+  add_data_symbol(data_symbols_list, "LDA", result_addr,  result_addr,  count * 2);
+  add_data_symbol(data_symbols_list, "ADD", left_addr,    left_addr,    count * 2);
+  add_data_symbol(data_symbols_list, "STA", result_addr,  result_addr,  count * 2);
 
-  add_data_symbol(data_symbols_list, "JZ",   -1, -1);   // JZ FIM — endereço resolvido depois
-  add_data_symbol(data_symbols_list, "JMP",  -1, -1);   // JMP LOOP — endereço resolvido depois
+  // Decrementa @MUL_COUNTER
+  add_data_symbol(data_symbols_list, "LDA", counter_addr, counter_addr, count * 2);
+  add_data_symbol(data_symbols_list, "ADD", neg1_addr,    neg1_addr,    count * 2);
+  add_data_symbol(data_symbols_list, "STA", counter_addr, counter_addr, count * 2);
+
+  // JZ → resolvido depois em body_symbols (sentinela address == -1)
+  add_data_symbol(data_symbols_list, "JZ",  0,        0,        count * 2);
+  // JMP → já sabemos o destino
+  add_data_symbol(data_symbols_list, "JMP", loop_line, loop_line, count * 2);
 }
 
-static void define_body_symbols(node_t *root, int *count, symbols_list_t **data_symbols_list) {
+static void define_body_symbols(node_t *root, symbols_list_t **data_symbols_list) {
   if (root == NULL)
     return;
-
+  
   if (root->type == NUMBER) {
-    if (*count == 1) {
+    if (count == 0) {
       int addr = find_symbol_address(*data_symbols_list, root->value, "@DB");
-      add_data_symbol(data_symbols_list, "LDA", root->value, addr);
-      (*count)++;
+      add_data_symbol(data_symbols_list, "LDA", root->value, addr, count);
+      
     }
     return;
   }
 
-  define_body_symbols(root->left, count, data_symbols_list);
+  define_body_symbols(root->left, data_symbols_list);
 
   if (root->right != NULL) {
     char *op_name = NULL;
@@ -300,9 +348,7 @@ static void define_body_symbols(node_t *root, int *count, symbols_list_t **data_
         op_name = "ADD";
         break;
       case MULTIPLICATION_OPERATOR:
-        generate_code_multiplication(find_symbol_address(*data_symbols_list, root->left->value, "@DB"), 
-                                    find_symbol_address(*data_symbols_list, root->right->value, "@DB"), 
-                                    data_symbols_list);
+        generate_code_multiplication( root->left, root->right, data_symbols_list);
         break;
       default:
         break;
@@ -313,13 +359,12 @@ static void define_body_symbols(node_t *root, int *count, symbols_list_t **data_
       while (right_leaf->left != NULL) right_leaf = right_leaf->left;
 
       int addr = find_symbol_address(*data_symbols_list, right_leaf->value, "@DB");
-      add_data_symbol(data_symbols_list, op_name, right_leaf->value, addr);
-      (*count)++;
+      add_data_symbol(data_symbols_list, op_name, right_leaf->value, addr, count);
     }
   }
 
   if (root->right != NULL && root->right->type != NUMBER)
-    define_body_symbols(root->right, count, data_symbols_list);
+    define_body_symbols(root->right, data_symbols_list);
 }
 
 static void free_data_symbols(symbols_list_t *data_symbols_list) {
